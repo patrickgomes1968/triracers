@@ -5,6 +5,7 @@ class Race
   field :n, as: :name, type: String
   field :date, type: Date
   field :loc, as: :location, type: Address
+  field :next_bib, type: Integer, default: 0
 
   embeds_many :events, as: :parent, order: [:order.asc]
   has_many :entrants, foreign_key: "race._id", dependent: :delete, order: [:secs.asc, :bib.asc]
@@ -53,5 +54,45 @@ class Race
       self.location = object
     end
   end
+
+  def next_bib
+    self.inc(next_bib: 1)
+    self[:next_bib]
+  end
   
+  def get_group racer
+    if racer && racer.birth_year && racer.gender
+      quotient=(date.year-racer.birth_year)/10
+      min_age=quotient*10
+      max_age=((quotient+1)*10)-1
+      gender=racer.gender
+      name=min_age >= 60 ? "masters #{gender}" : "#{min_age} to #{max_age} (#{gender})"
+      Placing.demongoize(:name=>name)
+    end
+  end 
+
+  def create_entrant racer
+    race_attrs = self.attributes.symbolize_keys.slice(:_id, :n, :date)
+    racer_attrs = racer.info.attributes
+    group = get_group(racer)
+    entrant = Entrant.new(group: group)
+    entrant.race = race_attrs
+    entrant.racer = racer_attrs
+    events.each do |event|
+      entrant.send("#{event.name}=", event)
+    end
+    
+    if entrant.validate
+      entrant.bib = self.next_bib
+      entrant.save
+    end
+
+    return entrant
+  end
+
+  def self.upcoming_available_to racer
+    upcoming_race_ids = racer.races.upcoming.pluck(:race).map { |r| r[:_id] }
+    self.upcoming.not_in(:id => upcoming_race_ids)
+  end
+
 end
